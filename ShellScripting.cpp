@@ -2,76 +2,61 @@
 #include <unistd.h>
 #include <sys/wait.h>
 #include <cstring>
-#include <limits>
-
+#include <fstream>
+#include <sstream>
 using namespace std;
 
 #define MAX_COMMANDS 5
 #define MAX_ARGS 10
 #define MAX_TOKENS 50
 
-// Custom error handling class
-class ShellException {
-    string msg;
+// Simple error class for throwing errors
+class ShellError {
+    string message;
 public:
-    ShellException(const string& m) : msg(m) {}
-    const char* what() const noexcept { return msg.c_str(); }
+    ShellError(string msg) : message(msg) {}
+    string getMessage() { return message; } // Easy way to get error message
 };
 
-// Executes multiple piped commands with optional background execution
+// Run commands with pipes and background option
 void run(char* commands[MAX_COMMANDS][MAX_ARGS + 1], int total, bool background) {
     int pipefd[2];
     int input_fd = 0;
 
     for (int i = 0; i < total; i++) {
         try {
+            // Create pipe if not the last command
             if (i < total - 1) {
                 if (pipe(pipefd) < 0) {
-                    throw ShellException("Pipe creation failed");
+                    throw ShellError("Arre, pipe toot gaya! 😓");
                 }
             }
 
             pid_t pid = fork();
-            if (pid == 0) {
-                // Child process
-
-                // Redirect input from previous pipe if needed
+            if (pid == 0) { // Child process
                 if (input_fd != 0) {
-                    dup2(input_fd, 0);
+                    dup2(input_fd, 0); // Take input from previous pipe
                     close(input_fd);
                 }
-
-                // Redirect output to pipe if not the last command
                 if (i < total - 1) {
-                    dup2(pipefd[1], 1);
+                    dup2(pipefd[1], 1); // Send output to pipe
                     close(pipefd[0]);
                     close(pipefd[1]);
                 }
-
-                // Attempt to execute the command
                 execvp(commands[i][0], commands[i]);
-
-                // If execvp fails
-                cerr << "Error: Command not found: " << commands[i][0] << endl;
+                cerr << "Oops, command '" << commands[i][0] << "' went on a vacation! 😜" << endl;
                 exit(1);
-            } else if (pid > 0) {
-                // Parent process
-
-                // Close input if set
-                if (input_fd != 0) {
-                    close(input_fd);
-                }
-
-                // Set input for next command
+            } else if (pid > 0) { // Parent process
+                if (input_fd != 0) close(input_fd);
                 if (i < total - 1) {
                     close(pipefd[1]);
                     input_fd = pipefd[0];
                 }
             } else {
-                throw ShellException("Fork failed");
+                throw ShellError("Fork failed, child very bad! 😅");
             }
-        } catch (const ShellException& e) {
-            cerr << "Error: " << e.what() << endl;
+        } catch (ShellError& e) {
+            cerr << "Error: " << e.getMessage() << endl;
             if (input_fd != 0) close(input_fd);
             if (i < total - 1) {
                 close(pipefd[0]);
@@ -81,14 +66,33 @@ void run(char* commands[MAX_COMMANDS][MAX_ARGS + 1], int total, bool background)
         }
     }
 
-    if (input_fd != 0) {
-        close(input_fd);
-    }
+    if (input_fd != 0) close(input_fd);
 
     if (!background) {
-        for (int i = 0; i < total; i++) {
-            wait(NULL);
-        }
+        for (int i = 0; i < total; i++) wait(NULL); // Wait for kids to finish
+    } else {
+        cout << "Chal raha hai background mein, chill karo! 😎" << endl;
+    }
+}
+
+// Show memory usage for a process (Week 10: Address Space)
+void show_memstat(int pid) {
+    string path = "/proc/" + to_string(pid) + "/stat";
+    ifstream file(path);
+    if (!file) {
+        cerr << "Nahi mila /proc ke andar PID " << pid << "! 😕" << endl;
+        return;
+    }
+    string line;
+    getline(file, line);
+    stringstream ss(line);
+    string stats[52];
+    int i = 0;
+    while (ss >> stats[i] && i < 52) i++;
+    if (i >= 24) {
+        cout << "PID " << pid << " kharcha: " << stats[23] << " kB memory! 💾" << endl;
+    } else {
+        cerr << "Stat file mein kuch gadbad hai! 😫" << endl;
     }
 }
 
@@ -99,260 +103,92 @@ int main() {
 
     while (true) {
         try {
-            cout << "Shell> ";
+            cout << "😎 ShellBhai > ";
             cin.getline(input, 100);
 
-            if (cin.fail()) {
+            if (!cin) {
                 cin.clear();
-                cin.ignore(numeric_limits<streamsize>::max(), '\n');
-                throw ShellException("Input reading failed");
+                cin.ignore(1000, '\n'); // Simple way to clear input
+                throw ShellError("Input padhne mein problem, bhai! 😟");
             }
 
-            // Exit shell
+            // Exit the party
             if (strcmp(input, "exit") == 0 || strcmp(input, "quit") == 0) {
-                cout << "Exiting shell" << endl;
+                cout << "ShellBhai bolta hai: Alvida, dost! 👋" << endl;
                 break;
             }
 
-            // Built-in 'cd'
+            // Built-in 'cd' to change directory
             if (strncmp(input, "cd ", 3) == 0) {
                 char* path = input + 3;
                 if (chdir(path) != 0) {
-                    cerr << "Error: cd failed" << endl;
+                    cerr << "Error: Jagah nahi mili '" << path << "'! 🏠" << endl;
                 }
                 continue;
             }
 
-            // Tokenize input
+            // Split input into tokens
             int token_count = 0;
             char* token = strtok(input, " ");
-            while (token != NULL && token_count < MAX_TOKENS) {
+            while (token && token_count < MAX_TOKENS) {
                 tokens[token_count++] = token;
                 token = strtok(NULL, " ");
             }
-
             if (token_count == 0) continue;
 
-            // Check for background execution
+            // Check for background mode
             bool background = false;
             if (strcmp(tokens[token_count - 1], "&") == 0) {
                 background = true;
                 token_count--;
             }
 
-            // Parse commands from tokens
-            int cmd_index = 0;
-            int arg_index = 0;
-            for (int i = 0; i < token_count; i++) {
-                if (strcmp(tokens[i], "|") == 0) {
-                    if (arg_index == 0) {
-                        throw ShellException("Empty command in pipeline");
-                    }
-                    commands[cmd_index][arg_index] = NULL;
-                    cmd_index++;
-                    arg_index = 0;
-                } else {
-                    if (arg_index >= MAX_ARGS) {
-                        throw ShellException("Too many arguments");
-                    }
-                    commands[cmd_index][arg_index++] = tokens[i];
-                }
-            }
-
-            if (arg_index == 0) {
-                throw ShellException("Empty command");
-            }
-
-            commands[cmd_index][arg_index] = NULL;
-            cmd_index++;
-
-            // Run the parsed command(s)
-            run(commands, cmd_index, background);
-
-        } catch (const ShellException& e) {
-            cerr << "Error: " << e.what() << endl;
-            cin.clear();
-            cin.ignore(numeric_limits<streamsize>::max(), '\n');
-        }
-    }
-
-    return 0;
-}
-#include <iostream>
-#include <unistd.h>
-#include <sys/wait.h>
-#include <cstring>
-#include <limits>
-
-using namespace std;
-
-#define MAX_COMMANDS 5
-#define MAX_ARGS 10
-#define MAX_TOKENS 50
-
-// Custom error handling class
-class ShellException {
-    string msg;
-public:
-    ShellException(const string& m) : msg(m) {}
-    const char* what() const noexcept { return msg.c_str(); }
-};
-
-// Executes multiple piped commands with optional background execution
-void run(char* commands[MAX_COMMANDS][MAX_ARGS + 1], int total, bool background) {
-    int pipefd[2];
-    int input_fd = 0;
-
-    for (int i = 0; i < total; i++) {
-        try {
-            if (i < total - 1) {
-                if (pipe(pipefd) < 0) {
-                    throw ShellException("Pipe creation failed");
-                }
-            }
-
-            pid_t pid = fork();
-            if (pid == 0) {
-                // Child process
-
-                // Redirect input from previous pipe if needed
-                if (input_fd != 0) {
-                    dup2(input_fd, 0);
-                    close(input_fd);
-                }
-
-                // Redirect output to pipe if not the last command
-                if (i < total - 1) {
-                    dup2(pipefd[1], 1);
-                    close(pipefd[0]);
-                    close(pipefd[1]);
-                }
-
-                // Attempt to execute the command
-                execvp(commands[i][0], commands[i]);
-
-                // If execvp fails
-                cerr << "Error: Command not found: " << commands[i][0] << endl;
-                exit(1);
-            } else if (pid > 0) {
-                // Parent process
-
-                // Close input if set
-                if (input_fd != 0) {
-                    close(input_fd);
-                }
-
-                // Set input for next command
-                if (i < total - 1) {
-                    close(pipefd[1]);
-                    input_fd = pipefd[0];
-                }
-            } else {
-                throw ShellException("Fork failed");
-            }
-        } catch (const ShellException& e) {
-            cerr << "Error: " << e.what() << endl;
-            if (input_fd != 0) close(input_fd);
-            if (i < total - 1) {
-                close(pipefd[0]);
-                close(pipefd[1]);
-            }
-            exit(1);
-        }
-    }
-
-    if (input_fd != 0) {
-        close(input_fd);
-    }
-
-    if (!background) {
-        for (int i = 0; i < total; i++) {
-            wait(NULL);
-        }
-    }
-}
-
-int main() {
-    char input[100];
-    char* tokens[MAX_TOKENS];
-    char* commands[MAX_COMMANDS][MAX_ARGS + 1];
-
-    while (true) {
-        try {
-            cout << "Shell> ";
-            cin.getline(input, 100);
-
-            if (cin.fail()) {
-                cin.clear();
-                cin.ignore(numeric_limits<streamsize>::max(), '\n');
-                throw ShellException("Input reading failed");
-            }
-
-            // Exit shell
-            if (strcmp(input, "exit") == 0 || strcmp(input, "quit") == 0) {
-                cout << "Exiting shell" << endl;
-                break;
-            }
-
-            // Built-in 'cd'
-            if (strncmp(input, "cd ", 3) == 0) {
-                char* path = input + 3;
-                if (chdir(path) != 0) {
-                    cerr << "Error: cd failed" << endl;
+            // Check for 'memstat' command
+            if (token_count == 2 && strcmp(tokens[0], "memstat") == 0) {
+                try {
+                    int pid = stoi(tokens[1]);
+                    show_memstat(pid);
+                } catch (...) {
+                    cerr << "PID number hi galat daal diya, bhai! 😜" << endl;
                 }
                 continue;
             }
 
-            // Tokenize input
-            int token_count = 0;
-            char* token = strtok(input, " ");
-            while (token != NULL && token_count < MAX_TOKENS) {
-                tokens[token_count++] = token;
-                token = strtok(NULL, " ");
-            }
-
-            if (token_count == 0) continue;
-
-            // Check for background execution
-            bool background = false;
-            if (strcmp(tokens[token_count - 1], "&") == 0) {
-                background = true;
-                token_count--;
-            }
-
-            // Parse commands from tokens
-            int cmd_index = 0;
-            int arg_index = 0;
+            // Parse tokens into commands
+            int cmd_index = 0, arg_index = 0;
             for (int i = 0; i < token_count; i++) {
                 if (strcmp(tokens[i], "|") == 0) {
                     if (arg_index == 0) {
-                        throw ShellException("Empty command in pipeline");
+                        throw ShellError("Pipe ke pehle command to daal, yaar! 😣");
                     }
                     commands[cmd_index][arg_index] = NULL;
                     cmd_index++;
                     arg_index = 0;
+                    if (cmd_index >= MAX_COMMANDS) {
+                        throw ShellError("Itne saare commands? Thodi si shanti rakh! 😬");
+                    }
                 } else {
                     if (arg_index >= MAX_ARGS) {
-                        throw ShellException("Too many arguments");
+                        throw ShellError("Bohot arguments daal diye, bhai! 😵");
                     }
                     commands[cmd_index][arg_index++] = tokens[i];
                 }
             }
 
             if (arg_index == 0) {
-                throw ShellException("Empty command");
+                throw ShellError("Command hi nahi diya, kya karu main? 😕");
             }
 
             commands[cmd_index][arg_index] = NULL;
             cmd_index++;
 
-            // Run the parsed command(s)
+            // Let's roll the commands!
             run(commands, cmd_index, background);
 
-        } catch (const ShellException& e) {
-            cerr << "Error: " << e.what() << endl;
+        } catch (ShellError& e) {
+            cerr << "Error: " << e.getMessage() << endl;
             cin.clear();
-            cin.ignore(numeric_limits<streamsize>::max(), '\n');
+            cin.ignore(1000, '\n'); // Clear input buffer
         }
     }
 
