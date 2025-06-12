@@ -1,0 +1,149 @@
+#include <iostream>
+#include <unistd.h>
+#include <sys/wait.h>
+#include <cstring>
+
+using namespace std;
+
+// Define maximum limits for commands, arguments, and tokens
+#define MAX_COMMANDS 5
+#define MAX_ARGS 10
+#define MAX_TOKENS 50
+
+// Function to execute commands, supporting pipelines and background execution
+void run(char* commands[MAX_COMMANDS][MAX_ARGS + 1], int total, bool background) {
+    int pipefd[2];  // Pipe file descriptors: [0] for reading, [1] for writing
+    int input_fd = 0;  // File descriptor for input (starts as stdin)
+
+    // Loop through each command
+    for (int i = 0; i < total; i++) {
+        // Create a pipe if this isn't the last command
+        if (i < total - 1) {
+            if (pipe(pipefd) < 0) {
+                perror("Pipe creation failed");
+                exit(1);
+            }
+        }
+
+        // Fork a child process
+        pid_t pid = fork();
+        if (pid == 0) {  // Child process
+            // If not the first command, redirect input from previous pipe
+            if (input_fd != 0) {
+                dup2(input_fd, 0);  // Redirect stdin to input_fd
+                close(input_fd);    // Close the original fd
+            }
+            // If not the last command, redirect output to pipe
+            if (i < total - 1) {
+                dup2(pipefd[1], 1);  // Redirect stdout to pipe write end
+                close(pipefd[0]);    // Close read end (not needed in child)
+                close(pipefd[1]);    // Close write end after redirect
+            }
+            // Execute the command
+            execvp(commands[i][0], commands[i]);
+            perror("Command execution failed");
+            exit(1);  // Exit child if execvp fails
+        } else if (pid > 0) {  // Parent process
+            // Close input_fd if it was set from a previous pipe
+            if (input_fd != 0) {
+                close(input_fd);
+            }
+            // If not the last command, set up for next command
+            if (i < total - 1) {
+                close(pipefd[1]);    // Close write end in parent
+                input_fd = pipefd[0];  // Save read end for next command
+            }
+        } else {
+            perror("Fork failed");
+        }
+    }
+
+    // Close the last input_fd if it exists (from the final pipe)
+    if (input_fd != 0) {
+        close(input_fd);
+    }
+
+    // Wait for all child processes if not background
+    if (!background) {
+        for (int i = 0; i < total; i++) {
+            wait(NULL);  // Wait for each child to finish
+        }
+    }
+}
+
+int main() {
+    char input[100];  // Buffer for user input
+    char* tokens[MAX_TOKENS];  // Array to store tokenized input
+    char* commands[MAX_COMMANDS][MAX_ARGS + 1];  // 2D array for commands and args
+
+    // Main shell loop
+    while (true) {
+        cout << "Shell> ";  // Display prompt
+        cin.getline(input, 100);  // Read user input
+
+        // Check for termination command
+        if (strcmp(input, "quit") == 0) {
+            cout << "Exiting shell" << endl;
+            break;  // Exit the loop
+        }
+
+        // Tokenize the input
+        int token_count = 0;
+        char* token = strtok(input, " ");  // Split by spaces
+        while (token != NULL && token_count < MAX_TOKENS) {
+            tokens[token_count++] = token;
+            token = strtok(NULL, " ");
+        }
+
+        // Skip empty input
+        if (token_count == 0) {
+            continue;
+        }
+
+        // Check for background execution
+        bool background = false;
+        if (token_count > 0 && strcmp(tokens[token_count - 1], "&") == 0) {
+            background = true;
+            token_count--;  // Remove '&' from tokens
+        }
+
+        // Parse commands separated by '|'
+        int cmd_index = 0;  // Index for current command
+        int arg_index = 0;  // Index for arguments in current command
+        for (int i = 0; i < token_count; i++) {
+            if (strcmp(tokens[i], "|") == 0) {
+                // Check for empty command before '|'
+                if (arg_index == 0) {
+                    cerr << "Error: Empty command in pipeline" << endl;
+                    goto next_iteration;
+                }
+                commands[cmd_index][arg_index] = NULL;  // Null-terminate args
+                cmd_index++;  // Move to next command
+                arg_index = 0;  // Reset arg index
+            } else {
+                // Check argument limit
+                if (arg_index >= MAX_ARGS) {
+                    cerr << "Error: Too many arguments" << endl;
+                    goto next_iteration;
+                }
+                commands[cmd_index][arg_index++] = tokens[i];  // Add argument
+            }
+        }
+
+        // Check for empty command at the end
+        if (arg_index == 0) {
+            cerr << "Error: Empty command" << endl;
+            goto next_iteration;
+        }
+        commands[cmd_index][arg_index] = NULL;  // Null-terminate last command
+        cmd_index++;  // Total number of commands
+
+        // Execute the parsed commands
+        run(commands, cmd_index, background);
+
+    next_iteration:
+        continue;  // Move to next loop iteration
+    }
+
+    return 0;  // Exit program
+}
